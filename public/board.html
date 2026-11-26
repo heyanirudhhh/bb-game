@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bug Hunt Leaderboard</title>
+<link rel="icon" href="/assets/mark.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --mint:#00da92; --mint2:#3cf0b4; --muted:#8b97a3; --line:rgba(255,255,255,.08); }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; color:#f4f7f6; font-family:Sora,-apple-system,BlinkMacSystemFont,sans-serif;
+    background:radial-gradient(70% 60% at 85% 0%, rgba(0,218,146,.16), transparent 70%), #06080b;
+    display:grid; grid-template-columns:1fr minmax(260px,30vw); gap:4vw; padding:5vh 5vw; }
+  header img { height:clamp(32px,5vh,64px); }
+  h1 { font-size:clamp(2.2rem,5.5vw,5rem); margin:.25em 0 .1em; font-weight:800; letter-spacing:-.03em; line-height:1; }
+  h1 em { font-style:normal; background:linear-gradient(90deg,var(--mint),var(--mint2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub { color:var(--muted); font-size:clamp(1rem,1.6vw,1.5rem); margin-bottom:3vh; }
+  ol { list-style:none; padding:0; margin:0; }
+  li { display:flex; align-items:center; gap:1em; padding:.55em 1em; margin:.4em 0; border-radius:.7em;
+    background:rgba(18,24,31,.75); border:1px solid var(--line); font-size:clamp(1.1rem,2.2vw,2rem); font-weight:600;
+    transition:transform .3s; }
+  li .pos { width:1.8em; text-align:center; color:var(--muted); font-weight:800; }
+  li .nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  li b { color:var(--mint); font-variant-numeric:tabular-nums; font-weight:800; }
+  li:nth-child(1) { background:linear-gradient(90deg,rgba(0,218,146,.25),rgba(0,218,146,.06)); border-color:rgba(0,218,146,.5); font-size:clamp(1.3rem,2.7vw,2.5rem); }
+  aside { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+  .qr { background:#fff; padding:1.2vw; border-radius:1.2rem; box-shadow:0 0 0 1px rgba(0,218,146,.4), 0 20px 80px rgba(0,218,146,.25); }
+  .qr img, .qr canvas { display:block; width:min(26vw,48vh) !important; height:auto !important; }
+  .scan { font-size:clamp(1.2rem,2.4vw,2.2rem); font-weight:800; margin-top:1em; }
+  .url { color:var(--muted); font-size:clamp(.8rem,1.1vw,1.1rem); margin-top:.4em; word-break:break-all; }
+  .count { color:var(--muted); margin-top:2vh; font-size:clamp(.9rem,1.2vw,1.2rem); }
+  @media (max-width:800px) { body { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+  <main>
+    <header><img src="/assets/logo-white.png" alt="BetterBugs"></header>
+    <h1>Bug <em>Hunt</em> Leaderboard</h1>
+    <div class="sub">Top scores win the raffle 🏆</div>
+    <ol id="l"></ol>
+    <div class="count" id="count"></div>
+  </main>
+  <aside>
+    <div class="qr" id="qr"></div>
+    <div class="scan">Scan to play</div>
+    <div class="url" id="url"></div>
+  </aside>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+// Game URL for the QR: ?url=https://your-domain overrides; otherwise this page's origin.
+const gameUrl = new URLSearchParams(location.search).get('url') || location.origin;
+document.getElementById('url').textContent = gameUrl.replace(/^https?:\/\//, '');
+try { new QRCode(document.getElementById('qr'), { text: gameUrl, width: 512, height: 512, colorDark: '#06080b', colorLight: '#ffffff' }); }
+catch (_) { document.querySelector('aside').style.display = 'none'; }
+
+const medals = ['🥇', '🥈', '🥉'];
+async function tick() {
+  try {
+    const j = await (await fetch('/api/leaderboard?limit=10', { cache: 'no-store' })).json();
+    const l = document.getElementById('l'); l.innerHTML = '';
+    j.top.forEach((e, i) => {
+      const li = document.createElement('li');
+      const pos = document.createElement('span'); pos.className = 'pos'; pos.textContent = medals[i] || i + 1;
+      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = e.name;
+      const b = document.createElement('b'); b.textContent = e.score;
+      li.append(pos, nm, b); l.append(li);
+    });
+    if (!j.top.length) l.innerHTML = '<li><span class="nm">No scores yet — be the first!</span></li>';
+    document.getElementById('count').textContent = `${j.total} player${j.total === 1 ? '' : 's'} so far`;
+  } catch (_) {}
+}
+tick(); setInterval(tick, 4000);
+</script>
+</body>
+</html>
