@@ -9,6 +9,8 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const FILE = path.join(DATA_DIR, 'scores.json');
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
+if (!ADMIN_KEY) console.warn('ADMIN_KEY not set: /api/export is disabled');
+else if (ADMIN_KEY.length < 16) console.warn('ADMIN_KEY is short; use 16+ random chars');
 const PUBLIC = path.join(__dirname, 'public');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -118,10 +120,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // CSV export for the raffle: /api/export?key=ADMIN_KEY (localhost only if no key is set)
+  // CSV export for the raffle: /api/export?key=ADMIN_KEY (or header "x-admin-key").
+  // Disabled entirely unless ADMIN_KEY is set — no localhost fallback, since behind a
+  // reverse proxy every request looks like it comes from 127.0.0.1.
   if (url.pathname === '/api/export') {
-    const local = ['::1', '127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
-    if (ADMIN_KEY ? url.searchParams.get('key') !== ADMIN_KEY : !local) return send(res, 403, { error: 'forbidden' });
+    if (limited(ip)) return send(res, 429, { error: 'slow down' });
+    if (!ADMIN_KEY) return send(res, 403, { error: 'export disabled: set ADMIN_KEY' });
+    const given = Buffer.from(String(req.headers['x-admin-key'] || url.searchParams.get('key') || ''));
+    const want = Buffer.from(ADMIN_KEY);
+    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return send(res, 403, { error: 'forbidden' });
     const q = (s) => `"${String(s || '').replace(/"/g, '""')}"`;
     const rows = sorted().map((e, i) => `${i + 1},${q(e.name)},${q(e.phone)},${e.score},${e.plays}`);
     return send(res, 200, 'rank,name,phone,best_score,plays\n' + rows.join('\n'), 'text/csv');
