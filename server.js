@@ -1,6 +1,7 @@
 // BetterBugs Bug Hunt - zero-dependency server (static files + leaderboard API)
 // Run: node server.js   (PORT, DATA_DIR, ADMIN_KEY are optional env vars)
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -43,9 +44,30 @@ function limited(ip) {
   return arr.length > 30;
 }
 
+// Game sessions: the server issues a one-time token when a run starts and measures
+// the run's duration itself, so clients can't claim a score without a real, timed run.
+const SESSION_TTL = 30 * 60 * 1000; // a run (plus offline sync delay) must finish within 30 min
+const MIN_RUN_MS = 1000;
+const MAX_OPEN_PER_IP = 20;
+const sessions = new Map(); // token -> { ip, startedAt }
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, s] of sessions) if (now - s.startedAt > SESSION_TTL) sessions.delete(k);
+}, 60000).unref();
+const openFor = (ip) => { let n = 0; for (const s of sessions.values()) if (s.ip === ip) n++; return n; };
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
-  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+  // only trust X-Forwarded-For when deployed behind a proxy that sets it (TRUST_PROXY=1)
+  const ip = (process.env.TRUST_PROXY && req.headers['x-forwarded-for']?.split(',').pop().trim())
+    || req.socket.remoteAddress;
+
+  if (url.pathname === '/api/start' && req.method === 'POST') {
+    if (limited(ip) || openFor(ip) >= MAX_OPEN_PER_IP) return send(res, 429, { error: 'slow down' });
+    const token = crypto.randomBytes(16).toString('hex');
+    sessions.set(token, { ip, startedAt: Date.now() });
+    return send(res, 200, { token });
+  }
 
   if (url.pathname === '/api/leaderboard' && req.method === 'GET') {
     const limit = Math.min(100, parseInt(url.searchParams.get('limit')) || 10);
@@ -67,9 +89,18 @@ const server = http.createServer((req, res) => {
       const phone = String(p.phone || '').trim().slice(0, 20);
       const digits = phone.replace(/\D/g, '');
       const score = Math.floor(Number(p.score));
-      const secs = Number(p.duration) / 1000;
       if (!name || !Number.isFinite(score) || score < 0) return send(res, 400, { error: 'invalid' });
       if (digits.length < 10 || digits.length > 13) return send(res, 400, { error: 'invalid phone' });
+
+      // require a valid, unused session token; duration is measured by the server
+      const sess = sessions.get(String(p.token || ''));
+      if (!sess) return send(res, 403, { error: 'no session' });
+      sessions.delete(String(p.token)); // single use: one score per run
+      const ms = Date.now() - sess.startedAt;
+      if (ms < MIN_RUN_MS || ms > SESSION_TTL) return send(res, 400, { error: 'implausible' });
+      // client-reported duration may only shorten the window (e.g. offline sync later)
+      const clientMs = Number(p.duration);
+      const secs = Math.min(ms, Number.isFinite(clientMs) && clientMs > 0 ? clientMs : ms) / 1000;
       // basic plausibility check (a perfect run earns well under 30 pts/sec)
       if (score > 20 + secs * 30) return send(res, 400, { error: 'implausible' });
 

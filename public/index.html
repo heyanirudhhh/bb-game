@@ -220,7 +220,7 @@ function fill() { while (lastPipeX < W + 80) spawnPipe(); }
 
 // ---------- input ----------
 function flap() {
-  if (state === 'ready') { state = 'play'; startedAt = performance.now(); }
+  if (state === 'ready') { state = 'play'; startedAt = performance.now(); runToken = startRun(); }
   if (state !== 'play') return;
   bird.vy = FLAP;
   beep(560, 0.06, 'sine', 0.06, 260);
@@ -513,9 +513,14 @@ $('btnName').onclick = () => { state = 'menu'; reset(); state = 'menu'; show('ov
 $('btnBoard').onclick = () => { show('ovBoard'); loadBoard($('boardList2'), 25); };
 $('btnBack').onclick = () => show(state === 'dead' ? 'ovOver' : 'ovName');
 
+let runToken = Promise.resolve(null);
+function startRun() {
+  return fetch('/api/start', { method: 'POST' })
+    .then((r) => (r.ok ? r.json() : {})).then((d) => d.token || null).catch(() => null);
+}
 async function submit(s) {
   const r = await fetch('/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
-  if (!r.ok) throw new Error('bad');
+  if (!r.ok) throw Object.assign(new Error('bad'), { rejected: r.status >= 400 && r.status < 500 && r.status !== 429 });
   return r.json();
 }
 function readPending() { try { return JSON.parse(localStorage.getItem('bb_pending') || '[]'); } catch (_) { return []; } }
@@ -523,7 +528,7 @@ function savePending(s) { const q = readPending(); q.push(s); localStorage.setIt
 async function flushPending() {
   const q = readPending(); if (!q.length) return;
   localStorage.removeItem('bb_pending');
-  for (const s of q) { try { await submit(s); } catch (_) { savePending(s); } }
+  for (const s of q) { try { await submit(s); } catch (e) { if (!e.rejected) savePending(s); } }
 }
 
 async function showOver() {
@@ -536,16 +541,16 @@ async function showOver() {
   $('boardList').innerHTML = '';
   show('ovOver');
   let myRank = 0;
-  const s = { name: playerName, phone: playerPhone, score, duration };
+  const s = { name: playerName, phone: playerPhone, score, duration, token: await runToken };
   try {
     const res = await submit(s);
     myRank = res.rank;
     $('rankLine').innerHTML = '';
     $('rankLine').append('You’re ranked ', Object.assign(document.createElement('b'), { textContent: '#' + res.rank }),
       ` of ${res.total} players · best ${res.best}`);
-  } catch (_) {
-    savePending(s);
-    $('rankLine').textContent = 'Offline — your score will sync automatically';
+  } catch (e) {
+    if (e.rejected) { $('rankLine').textContent = 'Score could not be verified'; }
+    else { savePending(s); $('rankLine').textContent = 'Offline — your score will sync automatically'; }
   }
   loadBoard($('boardList'), 5, myRank);
 }
