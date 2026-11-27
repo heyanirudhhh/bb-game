@@ -57,11 +57,9 @@ try { new QRCode(document.getElementById('qr'), { text: gameUrl, width: 512, hei
 catch (_) { document.querySelector('aside').style.display = 'none'; }
 
 const medals = ['🥇', '🥈', '🥉'];
-async function tick() {
-  try {
-    const j = await (await fetch('/api/leaderboard?limit=10', { cache: 'no-store' })).json();
+function render(j) {
     const l = document.getElementById('l'); l.innerHTML = '';
-    j.top.forEach((e, i) => {
+    j.top.slice(0, 10).forEach((e, i) => {
       const li = document.createElement('li');
       const pos = document.createElement('span'); pos.className = 'pos'; pos.textContent = medals[i] || i + 1;
       const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = e.name;
@@ -70,9 +68,21 @@ async function tick() {
     });
     if (!j.top.length) l.innerHTML = '<li><span class="nm">No scores yet — be the first!</span></li>';
     document.getElementById('count').textContent = `${j.total} player${j.total === 1 ? '' : 's'} so far`;
-  } catch (_) {}
 }
-tick(); setInterval(tick, 4000);
+// Live updates via SSE; fall back to polling if the stream is unavailable or refused.
+let pollTimer = null;
+function poll() {
+  if (pollTimer) return;
+  const tick = async () => {
+    try { render(await (await fetch('/api/leaderboard?limit=10', { cache: 'no-store' })).json()); } catch (_) {}
+  };
+  tick(); pollTimer = setInterval(tick, 5000);
+}
+if (window.EventSource) {
+  const es = new EventSource('/api/stream');
+  es.onmessage = (e) => { try { render(JSON.parse(e.data)); } catch (_) {} };
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) poll(); };
+} else poll();
 </script>
 </body>
 </html>

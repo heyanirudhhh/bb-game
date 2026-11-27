@@ -470,24 +470,42 @@ let playerPhone = localStorage.getItem('bb_phone') || '';
 $('name').value = playerName;
 $('phone').value = playerPhone;
 
-function show(id) { for (const o of document.querySelectorAll('.overlay')) o.classList.toggle('show', o.id === id); }
-function renderBoard(el, top, myRank) {
+function show(id) {
+  for (const o of document.querySelectorAll('.overlay')) o.classList.toggle('show', o.id === id);
+  live(id === 'ovBoard' || id === 'ovOver');
+}
+
+// Live leaderboard: keep an SSE stream open only while a board is on screen.
+let es = null, me = null; // me = { name, score } of this player's saved entry, for highlighting
+function onLive(j) {
+  if ($('ovBoard').classList.contains('show')) renderBoard($('boardList2'), j.top.slice(0, 25), me);
+  if ($('ovOver').classList.contains('show') && $('boardList').children.length) renderBoard($('boardList'), j.top.slice(0, 5), me);
+}
+function live(on) {
+  if (on && !es && window.EventSource) {
+    es = new EventSource('/api/stream');
+    es.onmessage = (e) => { try { onLive(JSON.parse(e.data)); } catch (_) {} };
+  } else if (!on && es) { es.close(); es = null; }
+}
+
+function renderBoard(el, top, me) {
   el.innerHTML = '';
   if (!top.length) { el.innerHTML = '<li class="empty">No scores yet — be the first!</li>'; return; }
   const medals = ['🥇', '🥈', '🥉'];
+  let marked = false;
   top.forEach((e, i) => {
     const li = document.createElement('li');
-    if (myRank === i + 1) li.className = 'me';
+    if (me && !marked && e.name === me.name && e.score === me.score) { li.className = 'me'; marked = true; }
     const pos = document.createElement('span'); pos.className = 'pos'; pos.textContent = medals[i] || i + 1;
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = e.name;
     const sc = document.createElement('b'); sc.textContent = e.score;
     li.append(pos, nm, sc); el.append(li);
   });
 }
-async function loadBoard(el, limit, myRank) {
+async function loadBoard(el, limit) {
   try {
     const r = await fetch('/api/leaderboard?limit=' + limit, { cache: 'no-store' });
-    const j = await r.json(); renderBoard(el, j.top, myRank);
+    const j = await r.json(); renderBoard(el, j.top, me);
   } catch (_) { el.innerHTML = '<li class="empty">Can’t reach the leaderboard</li>'; }
 }
 
@@ -540,11 +558,10 @@ async function showOver() {
   $('rankLine').textContent = 'Saving score…';
   $('boardList').innerHTML = '';
   show('ovOver');
-  let myRank = 0;
   const s = { name: playerName, phone: playerPhone, score, duration, token: await runToken };
   try {
     const res = await submit(s);
-    myRank = res.rank;
+    me = { name: playerName, score: res.best };
     $('rankLine').innerHTML = '';
     $('rankLine').append('You’re ranked ', Object.assign(document.createElement('b'), { textContent: '#' + res.rank }),
       ` of ${res.total} players · best ${res.best}`);
@@ -552,7 +569,7 @@ async function showOver() {
     if (e.rejected) { $('rankLine').textContent = 'Score could not be verified'; }
     else { savePending(s); $('rankLine').textContent = 'Offline — your score will sync automatically'; }
   }
-  loadBoard($('boardList'), 5, myRank);
+  loadBoard($('boardList'), 5);
 }
 
 reset(); state = 'menu';

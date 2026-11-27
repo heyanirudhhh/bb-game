@@ -58,6 +58,26 @@ setInterval(() => {
 }, 60000).unref();
 const openFor = (ip) => { let n = 0; for (const s of sessions.values()) if (s.ip === ip) n++; return n; };
 
+// Live leaderboard: Server-Sent Events. Clients hold /api/stream open and get the
+// top 100 pushed whenever a score changes (debounced), plus a heartbeat for proxies.
+const MAX_STREAMS = 1000;
+const MAX_STREAMS_PER_IP = 6;
+const streams = new Set(); // { res, ip }
+const snapshot = () => {
+  const all = sorted();
+  return JSON.stringify({ total: all.length, top: all.slice(0, 100).map((e) => ({ name: e.name, score: e.score })) });
+};
+let pushTimer = null;
+function broadcast() {
+  if (pushTimer) return;
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    const msg = `data: ${snapshot()}\n\n`;
+    for (const s of streams) s.res.write(msg);
+  }, 250);
+}
+setInterval(() => { for (const s of streams) s.res.write(': ping\n\n'); }, 25000).unref();
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   // only trust X-Forwarded-For when deployed behind a proxy that sets it (TRUST_PROXY=1)
@@ -78,6 +98,20 @@ const server = http.createServer((req, res) => {
       total: all.length,
       top: all.slice(0, limit).map((e) => ({ name: e.name, score: e.score })),
     });
+  }
+
+  if (url.pathname === '/api/stream' && req.method === 'GET') {
+    let mine = 0; for (const s of streams) if (s.ip === ip) mine++;
+    if (streams.size >= MAX_STREAMS || mine >= MAX_STREAMS_PER_IP) return send(res, 429, { error: 'too many streams' });
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store',
+      Connection: 'keep-alive', 'X-Accel-Buffering': 'no', // stop nginx from buffering
+    });
+    res.write(`retry: 3000\ndata: ${snapshot()}\n\n`);
+    const s = { res, ip };
+    streams.add(s);
+    req.on('close', () => streams.delete(s));
+    return;
   }
 
   if (url.pathname === '/api/score' && req.method === 'POST') {
@@ -114,6 +148,7 @@ const server = http.createServer((req, res) => {
       if (score > cur.score) { cur.score = score; cur.at = Date.now(); }
       db.entries[key] = cur;
       save();
+      broadcast();
       const rank = sorted().findIndex((e) => e === cur) + 1;
       send(res, 200, { rank, best: cur.score, total: Object.keys(db.entries).length });
     });
